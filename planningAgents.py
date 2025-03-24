@@ -20,15 +20,12 @@ class DQNPacman(nn.Module):
         super(DQNPacman, self).__init__()
         self.fc1 = nn.Linear(input_size, 256)
         self.fc2 = nn.Linear(256, 256)
-        self.fc3 = nn.Linear(256, 64)
-        self.fc4 = nn.Linear(64, output_size)
+        self.fc3 = nn.Linear(256, output_size)
         
     def forward(self, x):
-        x1 = F.relu(self.fc1(x))
-        x2 = F.relu(self.fc2(x1))
-        x3 = x2+x1
-        x4 = F.relu(self.fc3(x3))
-        return self.fc4(x4)
+        x1 = F.leaky_relu(self.fc1(x))
+        x2 = F.leaky_relu(self.fc2(x1))
+        return self.fc3(x2)
 
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
@@ -102,10 +99,10 @@ class PlanningAgent(game.Agent):
         self.BATCH_SIZE = 128
         self.GAMMA = 0.95
         self.EPS_START = 0.90
-        self.EPS_END = 0.1
-        self.EPS_DECAY = 800
-        self.TAU = 0.08
-        self.LR = 5e-5
+        self.EPS_END = 0.05
+        self.EPS_DECAY = 1000
+        self.TAU = 0.1
+        self.LR = 1e-3
 
         self.policy_net = DQNPacman(self.state_size, self.n_actions).to(self.device)
         self.target_net = DQNPacman(self.state_size, self.n_actions).to(self.device)
@@ -286,6 +283,8 @@ class PlanningAgent(game.Agent):
         episode_losses = []  
         best_score = -math.inf
 
+        hard_update_frequency = 50
+
         for episode in range(num_episodes):
             print("Episode:", episode)
             state = self.reset_environment()
@@ -300,24 +299,48 @@ class PlanningAgent(game.Agent):
                 legal_actions = state.getLegalPacmanActions()
                 action = self.select_action(state, legal_actions)
                 next_state = state.generateSuccessor(0, action)
-                
+                done = self.check_terminal(next_state)         
+
                 # Simulate ghost moves
-                next_copy = next_state.deepCopy()
-                for g in range(1, state.getNumAgents()):
-                    dist = util.Counter()
-                    for a in next_copy.getLegalActions(g):
-                        dist[a] = 1.0
-                    dist.normalize()
-                    if len(dist) == 0:
-                        next_state = next_copy.generateSuccessor(g, Directions.STOP)
-                    else:
-                        next_state = next_copy.generateSuccessor(g, util.chooseFromDistribution(dist))
-                    done = self.check_terminal(next_state)
-                    if done:
-                        break
+                if not done:
+                    next_copy = next_state.deepCopy()
+                    for g in range(1, next_state.getNumAgents()):
+                        dist = util.Counter()
+                        for a in next_copy.getLegalActions(g):
+                            dist[a] = 1.0
+                        dist.normalize()
+                        if len(dist) == 0:
+                            next_state = next_copy.generateSuccessor(g, Directions.STOP)
+                        else:
+                            next_state = next_copy.generateSuccessor(g, util.chooseFromDistribution(dist))
+                        # next_copy = next_state.deepCopy()
+                        done = self.check_terminal(next_state)
+                        if done:
+                            break
 
                 current_score = next_state.getScore()       
                 reward = current_score - previous_score
+
+                previous_food_count = len(state.getFood().asList())
+                current_food_count = len(next_state.getFood().asList())
+
+                if current_food_count < previous_food_count:
+                    food_eaten = previous_food_count - current_food_count
+                    reward += food_eaten * 30  # more per food
+                                
+                # penalize score based on ghost distance
+                ghost_positions = state.getGhostPositions()
+                pacman_pos = state.getPacmanPosition()
+
+                min_dist = -1
+                for ghost_pos in ghost_positions:
+                    distance = util.manhattanDistance(pacman_pos, ghost_pos)
+                    if distance == 0:
+                        distance = 0.5
+                    min_dist = min(min_dist, distance)
+                penalty = 10 / min_dist 
+                reward -= penalty
+
                 previous_score = current_score
                 eps_avg_rew.append(reward)
 
@@ -359,8 +382,10 @@ class PlanningAgent(game.Agent):
             avg_loss = sum(losses)/len(losses) if losses else 0
             episode_losses.append(avg_loss)
             print(f"max: {max_reward}, min: {min_reward}, avg: {np.mean(eps_avg_rew)}")
-            # if episode % 10 == 0:
-            #     self.TAU *= 0.6
+
+            if (episode + 1) % hard_update_frequency == 0:
+                self.target_net.load_state_dict(self.policy_net.state_dict())
+                print("hard update")
 
         print('best score: ', best_score)
         self.save_model(self.best_model)
