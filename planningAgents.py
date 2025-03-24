@@ -18,9 +18,9 @@ import matplotlib.pyplot as plt
 class DQNPacman(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQNPacman, self).__init__()
-        self.fc1 = nn.Linear(input_size, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, 64)
+        self.fc1 = nn.Linear(input_size, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 64)
         self.fc4 = nn.Linear(64, output_size)
         
     def forward(self, x):
@@ -71,7 +71,6 @@ class PlanningAgent(game.Agent):
     "An agent that turns left at every opportunity"
 
     def __init__(self, layout : Layout, **kwargs):
-        print(layout)
         self.layout = layout
         self.deep_copy_layout = layout.deepCopy()
         self.best_model = None
@@ -101,19 +100,19 @@ class PlanningAgent(game.Agent):
         # TAU is the update rate of the target network
         # LR is the learning rate of the ``AdamW`` optimizer
         self.BATCH_SIZE = 128
-        self.GAMMA = 0.4
+        self.GAMMA = 0.95
         self.EPS_START = 0.90
-        self.EPS_END = 0.05
-        self.EPS_DECAY = 1000
-        self.TAU = 0.1
-        self.LR = 1e-3
+        self.EPS_END = 0.1
+        self.EPS_DECAY = 800
+        self.TAU = 0.08
+        self.LR = 5e-5
 
         self.policy_net = DQNPacman(self.state_size, self.n_actions).to(self.device)
         self.target_net = DQNPacman(self.state_size, self.n_actions).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         self.optimizer = optim.AdamW(self.policy_net.parameters(), lr=self.LR, amsgrad=True)
-        self.memory = ReplayMemory(5000)
+        self.memory = ReplayMemory(30000)
 
         self.steps_done = 0
         self.is_training = True
@@ -153,7 +152,7 @@ class PlanningAgent(game.Agent):
         ## FOOD LEFT
         food_grid = state.getFood()
         food_positions = food_grid.asList()
-        features_vector.append(len(food_positions))
+        features_vector.append(len(food_positions)/self.init_total_food) # norm
 
         dir_map = {'North':0, 'South':1, 'East':2, 'West':3, 'Stop':4}
 
@@ -216,7 +215,7 @@ class PlanningAgent(game.Agent):
     def select_action(self, state, legal_actions):
         eps_threshold = self.EPS_END + (self.EPS_START - self.EPS_END) * math.exp(-1. * self.steps_done / self.EPS_DECAY)
         self.steps_done += 1
-        print(eps_threshold)
+        # print(eps_threshold)
         if random.random() < eps_threshold and self.is_training:
             return random.choice(legal_actions)
         
@@ -265,7 +264,7 @@ class PlanningAgent(game.Agent):
 
         self.optimizer.zero_grad()
         loss.backward()
-        print('loss: ', loss.item())
+        # print('loss: ', loss.item())
         self.optimizer.step()
         return loss.item()
 
@@ -280,7 +279,7 @@ class PlanningAgent(game.Agent):
 
     def offline_planning(self):
         self.is_training = True
-        num_episodes = 150
+        num_episodes = 100
         max_episode_rewards = [] 
         min_episode_rewards = [] 
         eps_rewards = []
@@ -318,9 +317,9 @@ class PlanningAgent(game.Agent):
                         break
 
                 current_score = next_state.getScore()       
-                eps_avg_rew.append(current_score)
                 reward = current_score - previous_score
                 previous_score = current_score
+                eps_avg_rew.append(reward)
 
                 max_reward = max(reward, max_reward)
                 min_reward = min(reward, min_reward)
@@ -359,9 +358,9 @@ class PlanningAgent(game.Agent):
             eps_rewards.append(np.mean(eps_avg_rew))
             avg_loss = sum(losses)/len(losses) if losses else 0
             episode_losses.append(avg_loss)
-
-            if episode % 10 == 0:
-                self.TAU *= 0.6
+            print(f"max: {max_reward}, min: {min_reward}, avg: {np.mean(eps_avg_rew)}")
+            # if episode % 10 == 0:
+            #     self.TAU *= 0.6
 
         print('best score: ', best_score)
         self.save_model(self.best_model)
